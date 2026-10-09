@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# User-supplied flight logs and generated output are runtime data, not
+# part of the shipped project.
+/flight_data/
+/output/*.csv
+
+.venv/
+venv/
