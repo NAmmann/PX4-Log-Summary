@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 class Severity(Enum):
@@ -200,3 +200,105 @@ class ProcessingStats:
     error_analyses_incomplete: int = 0
     exported_without_time_reference: int = 0
     output_csv_path: Optional[Path] = None
+    output_pdf_path: Optional[Path] = None
+    pdf_flight_event_groups: int = 0
+
+
+@dataclass(frozen=True)
+class TrajectoryPoint:
+    """One GPS fix on a flight's trajectory, for PDF map rendering."""
+
+    latitude_deg: float
+    longitude_deg: float
+    timestamp_us: int
+
+
+@dataclass(frozen=True)
+class BatteryReading:
+    """A single selected `battery_status.remaining` sample."""
+
+    remaining_fraction: float
+
+    @property
+    def percentage(self) -> float:
+        return self.remaining_fraction * 100
+
+
+@dataclass
+class FlightPdfData:
+    """PDF-only data layered on top of one `FlightRecord`.
+
+    Kept separate from `FlightRecord` itself (rather than extending it)
+    since the CSV export path has no use for trajectories, battery
+    readings or formatted transition lines.
+    """
+
+    flight_record: FlightRecord
+    trajectory: List[TrajectoryPoint]
+    battery_start: Optional[BatteryReading]
+    battery_end: Optional[BatteryReading]
+    transition_lines: List[str]
+
+    def sort_key(self, input_directory: Path):
+        return self.flight_record.sort_key(input_directory)
+
+
+@dataclass
+class FlightEventGroup:
+    """One or more `FlightPdfData` entries whose time windows overlap.
+
+    Multiple UAVs flying at the same time become one group -- one entry
+    on the printed flight list -- even though each UAV still gets its
+    own CSV row.
+    """
+
+    members: List[FlightPdfData]
+
+    @property
+    def uav_names(self) -> List[str]:
+        seen = []
+        for member in self.members:
+            name = member.flight_record.uav_name
+            if name not in seen:
+                seen.append(name)
+        return seen
+
+    @property
+    def earliest_start_utc(self) -> Optional[datetime]:
+        starts = [
+            member.flight_record.time_resolution.resolved_start_utc
+            for member in self.members
+            if member.flight_record.time_resolution.resolved_start_utc is not None
+        ]
+        return min(starts) if starts else None
+
+    @property
+    def latest_end_utc(self) -> Optional[datetime]:
+        ends = [
+            member.flight_record.time_resolution.resolved_end_utc
+            for member in self.members
+            if member.flight_record.time_resolution.resolved_end_utc is not None
+        ]
+        return max(ends) if ends else None
+
+
+@dataclass(frozen=True)
+class UavTrajectory:
+    """One UAV's trajectory, with its assigned display color, ready for map rendering."""
+
+    uav_name: str
+    color: str
+    points: List[TrajectoryPoint]
+
+
+@dataclass(frozen=True)
+class ReportHeader:
+    """Parsed title-page fields for the PDF flight test summary."""
+
+    year: Optional[str]
+    mmdd: Optional[str]
+    project: Optional[str]
+    place: Optional[str]
+    header_label: str
+    flight_count: int
+    total_flight_hours: float
