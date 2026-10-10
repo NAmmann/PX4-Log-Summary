@@ -1,10 +1,10 @@
 # PX4 Flight Log Analyzer
 
 A command-line tool that scans a directory tree of PX4 `.ulg` flight logs and
-produces a single CSV overview of every detected flight, including
-technical error/warning findings. It runs on Windows and Linux, needs no
-command-line arguments and no configuration files -- every tunable setting
-lives in `settings.py`.
+produces a CSV overview of every detected flight plus a printable PDF flight
+test summary, including technical error/warning findings. It runs on Windows
+and Linux, needs no command-line arguments and no configuration files --
+every tunable setting lives in `settings.py`.
 
 ## Table of contents
 
@@ -21,6 +21,7 @@ lives in `settings.py`.
 - [GPS start-coordinate resolution](#gps-start-coordinate-resolution)
 - [Error/warning detection and assignment](#errorwarning-detection-and-assignment)
 - [CSV column reference](#csv-column-reference)
+- [PDF flight test summary](#pdf-flight-test-summary)
 - [Timezones and time formats](#timezones-and-time-formats)
 - [Behavior on faulty input](#behavior-on-faulty-input)
 - [Running the tests](#running-the-tests)
@@ -40,6 +41,10 @@ lives in `settings.py`.
 - Detects and classifies WARNING/ERROR/CRITICAL log messages and assigns
   them to the correct flight by timestamp.
 - Exports one CSV row per valid flight, sorted chronologically.
+- Generates a printable PDF flight test summary alongside the CSV: a title
+  page, one entry per flight (merging simultaneous multi-UAV flights), a
+  trajectory map, battery/message/state-transition details, and a trailing
+  notes page -- see [PDF flight test summary](#pdf-flight-test-summary).
 - Prints an end-of-run console summary with consistent counters.
 - Keeps processing the rest of the input when an individual file is
   corrupt, unreadable, or otherwise unusable.
@@ -49,7 +54,8 @@ lives in `settings.py`.
 
 - Python 3.11 or newer (see [Known limitations](#known-limitations) for the
   version this was actually developed and tested against).
-- The packages listed in `requirements.txt` (`pyulog`, `tzdata`, `pytest`).
+- The packages listed in `requirements.txt` (`pyulog`, `tzdata`, `pytest`,
+  `reportlab`, `staticmap`, `pillow`, `requests`, `pypdf`).
 
 ## Installation (Windows)
 
@@ -102,17 +108,19 @@ All tunable behavior lives in `settings.py`, next to `px4_flight_analyzer.py`:
 
 | Setting | Meaning |
 | --- | --- |
-| `INPUT_DIRECTORY` | Root folder to scan for `.ulg` files. |
+| `INPUT_DIRECTORY` | Root folder to scan for `.ulg` files. Its own folder name doubles as the PDF title page's `MMDD_PROJECT_PLACE` header source -- see [PDF flight test summary](#pdf-flight-test-summary). |
 | `OUTPUT_CSV` | Destination path for the generated CSV. |
+| `OUTPUT_PDF` | Destination path for the generated PDF flight test summary. Must not resolve to the same file as `OUTPUT_CSV`. |
 | `MINIMUM_FLIGHT_DURATION_SECONDS` | Flights shorter than this are discarded. |
 | `CSV_DELIMITER` | CSV field separator (default `;`, for German Excel). |
 | `TIMEZONE` | IANA timezone name used for all date/time output (e.g. `UTC`, `Europe/Berlin`). |
 | `RECURSIVE_SEARCH` | Search all subfolders (`True`) or only the top level (`False`). |
 | `VERBOSE_LOGGING` | Print additional flight-detection/GPS/error-analysis diagnostics. |
-| `OVERWRITE_OUTPUT` | `True` overwrites an existing output file; `False` aborts the run with a clear error if the file already exists. |
+| `OVERWRITE_OUTPUT` | `True` overwrites an existing `OUTPUT_CSV`/`OUTPUT_PDF`; `False` aborts the run with a clear error if either file already exists. |
+| `MAP_FETCH_ONLINE_TILES` | `True` fetches real OpenStreetMap tiles for the PDF's trajectory maps (a network call -- see [Deliberate deviations](#deliberate-deviations-from-the-literal-brief)); `False` skips straight to an offline blank-grid trajectory plot. |
 
-`INPUT_DIRECTORY` and `OUTPUT_CSV` may be relative or absolute `Path`
-objects. Relative paths are always resolved against the **project
+`INPUT_DIRECTORY`, `OUTPUT_CSV` and `OUTPUT_PDF` may be relative or absolute
+`Path` objects. Relative paths are always resolved against the **project
 directory** (the folder containing `px4_flight_analyzer.py`), determined
 from the script's own file location -- never from the current working
 directory the tool happens to be started from. This is verified by a test
@@ -140,14 +148,22 @@ px4-flight-analyzer/
 │   ├── scanner.py                 # file discovery + UAV/Pilot assignment
 │   ├── parser.py                  # pyulog.ULog loading chokepoint
 │   ├── flight_detection.py        # liftoff/touchdown segment detection
+│   ├── geo.py                     # shared GPS field-sniffing (lat/lon arrays, plausibility)
 │   ├── gps.py                     # start-coordinate resolution
+│   ├── trajectory.py              # full-trajectory extraction (PDF map data)
+│   ├── battery.py                 # battery-level resolution (PDF data)
+│   ├── state_transitions.py       # nav_state/armed transition tracking (PDF data)
 │   ├── time_resolution.py         # GPS-UTC offset + time formatting
 │   ├── error_analysis.py          # log-message classification + assignment
-│   └── csv_export.py              # row building + CSV writing
+│   ├── csv_export.py              # row building + CSV writing
+│   ├── flight_grouping.py         # cross-UAV time-overlap grouping (PDF data)
+│   ├── report_metadata.py         # PDF title-page parsing + summary stats
+│   ├── map_render.py              # trajectory map rendering (online + offline fallback)
+│   └── pdf_report.py              # PDF flight test summary rendering
 ├── tests/
 │   ├── conftest.py
 │   ├── helpers/ulog_builder.py    # synthetic .ulg file builder for tests
-│   └── test_*.py                  # ~140 automated test cases
+│   └── test_*.py                  # ~205 automated test cases
 └── output/                        # created automatically if missing
 ```
 
@@ -157,10 +173,10 @@ below). `src/` is made importable via a plain `sys.path` insertion in
 both `px4_flight_analyzer.py` and `tests/conftest.py`.
 
 Each concern -- file discovery, UAV/Pilot assignment, ULog parsing, flight
-detection, GPS resolution, error analysis, CSV export, console output --
-lives in its own module, so a future HTML/PDF/JSON exporter or additional
-filters (by UAV, pilot, time range) can be added without touching flight
-detection or error analysis.
+detection, GPS resolution, error analysis, CSV export, PDF export, console
+output -- lives in its own module, so a future HTML/JSON exporter or
+additional filters (by UAV, pilot, time range) can be added without
+touching flight detection or error analysis.
 
 ## UAV/Pilot folder-naming rules
 
@@ -354,6 +370,66 @@ time reference follow, ordered by their source file's path relative to
 the input directory (case-insensitive, OS-independent), then by segment
 index within that file.
 
+## PDF flight test summary
+
+Alongside the CSV, every run also writes a printable PDF flight test
+summary to `OUTPUT_PDF` -- a human-readable, field-ready report rather than
+a data export.
+
+**Title page.** The header is parsed from `INPUT_DIRECTORY`'s own path, in
+the format `YYYY/MMDD_<PROJECT>_<PLACE>`: `INPUT_DIRECTORY`'s folder name
+must itself be `MMDD_PROJECT_PLACE`, and its *parent* folder's name must be
+a 4-digit year. Both parts are split using the same "first separator
+significant, rest belongs to the last part" rule as
+[UAV/Pilot folder names](#uavpilot-folder-naming-rules) (reusing
+`scanner.parse_uav_pilot_folder_name` directly, applied twice: once for
+`MMDD` vs. the rest, once more for `PROJECT` vs. `PLACE`). If the folder
+structure doesn't match, the PDF still renders with a clear placeholder
+instead of a blank or invented header -- this is never fatal to the run.
+The title page also shows the number of flights and total flight hours
+(see below).
+
+**Merging simultaneous flights.** If multiple UAVs were flying at the same
+time, their flights are merged into one "flight event" entry on the printed
+list -- each UAV still gets its own CSV row, unaffected by this merge.
+Overlap is computed on each flight's resolved GPS-UTC time window; two
+windows that merely touch (`end_A == start_B`) count as overlapping, and a
+chain of 3+ overlapping flights (A overlaps B, B overlaps C, even if A and
+C don't directly overlap) collapses into a single group. Flights with no
+resolved GPS-UTC time reference can't be compared to anything and are
+therefore always their own entry, never merged by guesswork. The title
+page's "number of flights" counts these merged groups; "total flight
+hours" sums every individual UAV flight's own duration, **not**
+deduplicated across a merged group -- two UAVs flying the same 10 minutes
+count as 1 flight event but 0.33 h, not 0.17 h.
+
+**Per-flight content**, for each merged group: the UAV name(s) and
+pilot(s), a trajectory map, a color-coded legend (the same color
+identifies a UAV on the map and in the legend, stable across the whole
+report), and then per UAV: start/landing time, battery level (remaining
+percentage only) at liftoff and touchdown, the same message list as the
+CSV's `FehlermeldungenDetails` column, and a list of flight-mode
+(`nav_state`) and armed-state transitions. The transition list always
+includes a synthetic entry for whichever mode/armed state was already in
+effect at liftoff (labeled "at liftoff"), so a flight with zero in-flight
+mode changes still shows its flight mode rather than an empty list.
+`nav_state` names come from a best-effort, hardcoded mapping (see
+[Known limitations](#known-limitations)) -- an unrecognized value renders
+as `nav_state=<N> (unknown)` rather than a guess.
+
+**Trajectory maps.** When `MAP_FETCH_ONLINE_TILES = True`, the map is real
+OpenStreetMap tiles (via the `staticmap` package) showing each UAV's
+GPS track for that flight. Any failure fetching tiles (no network, DNS,
+timeout, HTTP error) -- or `MAP_FETCH_ONLINE_TILES = False` outright --
+falls back to an offline blank-grid trajectory plot drawn directly with
+Pillow, so the PDF is always produced even without network access. See
+[Deliberate deviations](#deliberate-deviations-from-the-literal-brief) for
+why fetching tiles is an intentional exception to this project's otherwise
+strict zero-network-calls stance.
+
+**Notes page.** The report ends with one trailing page of ruled blank
+lines for handwritten notes during or after the test flight.
+
 ## Timezones and time formats
 
 - `TIMEZONE` in `settings.py` must be a valid IANA timezone name (`UTC`,
@@ -394,10 +470,13 @@ index within that file.
 - Missing GPS data, missing/inconsistent flight-state topics, and
   missing time references never raise -- they result in blank fields and
   a logged reason, never an invented value.
-- An already-existing output file is either overwritten
-  (`OVERWRITE_OUTPUT = True`) or causes a single, clear abort *before*
-  any file is scanned (`OVERWRITE_OUTPUT = False`) -- this is the one
-  case where the whole run stops rather than tolerating and continuing.
+- An already-existing output file (`OUTPUT_CSV` or `OUTPUT_PDF`) is either
+  overwritten (`OVERWRITE_OUTPUT = True`) or causes a single, clear abort
+  *before* any file is scanned (`OVERWRITE_OUTPUT = False`) -- this is the
+  one case where the whole run stops rather than tolerating and continuing.
+- A trajectory map that can't fetch online tiles (no network, DNS,
+  timeout, HTTP error) never aborts the run or hangs -- it falls back to
+  an offline blank-grid plot, logged as a warning.
 - The original `.ulg` files are only ever opened for reading.
 
 ## Running the tests
@@ -407,11 +486,14 @@ pip install -r requirements.txt   # includes pytest
 python3 -m pytest tests/ -v
 ```
 
-The suite (~140 cases across 8 files) covers every scenario from the
+The suite (~205 cases across the modules listed under
+[Project structure](#project-structure)) covers every scenario from the
 project brief: file discovery and UAV/Pilot assignment, flight detection
 (including multi-flight files, missing start/end, implausible duration,
 armed-state cross-checks), GPS resolution, error/warning detection and
-assignment, CSV formatting and sorting, settings validation, and full
+assignment, CSV formatting and sorting, settings validation, PDF report
+generation (trajectory/battery/transition extraction, cross-UAV grouping,
+title-page parsing, map rendering with no real sockets opened), and full
 end-to-end runs -- including one genuine subprocess invocation of
 `python px4_flight_analyzer.py` with no arguments from an unrelated
 working directory.
@@ -456,6 +538,19 @@ fixtures are genuinely parsed by the real library, not mocked.
   filtered out by `MINIMUM_FLIGHT_DURATION_SECONDS` for fast bounces; no
   merge logic was added for slower ones, since merging risks silently
   collapsing two genuinely separate short missions into one.
+- **Best-effort `nav_state` name mapping.** PX4's `nav_state` (flight
+  mode) enum isn't decoded by `pyulog` -- classic ULog `FORMAT` messages
+  carry no enum metadata, and the richer `event`-topic metadata that
+  *would* carry it is deliberately not decoded (see above). The PDF
+  report's state-transition list instead uses a hardcoded mapping of the
+  `nav_state` values most commonly seen in the field
+  (`state_transitions.NAV_STATE_NAMES`); any other value renders as
+  `nav_state=<N> (unknown)` rather than a guessed name.
+- **No cross-flight map tile cache.** Each flight's trajectory map is
+  rendered independently, so a multi-flight field day with overlapping
+  flight areas refetches overlapping OpenStreetMap tiles repeatedly
+  rather than reusing them across flights. A candidate for a future
+  version.
 
 ## Deliberate deviations from the literal brief
 
@@ -489,3 +584,19 @@ explicitly rather than silently:
    packaging/build file.
 4. **No `event`-topic decoding**, for the offline/no-network-risk reason
    explained under [Known limitations](#known-limitations).
+5. **The PDF report's trajectory maps make real network calls.** Every
+   other part of this tool is strictly offline (see point 4 above and
+   [Known limitations](#known-limitations)). The PDF's trajectory maps are
+   the one deliberate exception: with `MAP_FETCH_ONLINE_TILES = True`
+   (the default), `map_render.py` fetches real tile images from
+   `tile.openstreetmap.org` via the `staticmap` package, bounded by a 5
+   second per-tile timeout and a descriptive `User-Agent` (per OSM's tile
+   usage policy). Any failure -- or `MAP_FETCH_ONLINE_TILES = False` --
+   falls back to an offline blank-grid trajectory plot, so the tool still
+   runs to completion without network access; only the maps look
+   different. This was judged worth the deviation because a real map is
+   substantially more useful on a printed field report than a blank grid,
+   and the failure mode is fully graceful. The automated test suite never
+   opens a real socket (`MAP_FETCH_ONLINE_TILES = False` by default in
+   `tests/test_integration.py`, and `map_render`'s own tests monkeypatch
+   `staticmap.StaticMap.render` directly).
