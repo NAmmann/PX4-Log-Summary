@@ -31,27 +31,38 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
+from px4_flight_analyzer.battery import resolve_battery_level  # noqa: E402
 from px4_flight_analyzer.config import SettingsError, resolve_settings  # noqa: E402
 from px4_flight_analyzer.csv_export import write_csv  # noqa: E402
 from px4_flight_analyzer.error_analysis import analyze_file, analyze_segment  # noqa: E402
 from px4_flight_analyzer.flight_detection import detect_flight_segments  # noqa: E402
+from px4_flight_analyzer.flight_grouping import group_overlapping_flights  # noqa: E402
 from px4_flight_analyzer.gps import resolve_start_position  # noqa: E402
 from px4_flight_analyzer.logging_setup import configure_logging  # noqa: E402
 from px4_flight_analyzer.models import (  # noqa: E402
     ErrorAnalysisStatus,
     ErrorPresence,
+    FlightPdfData,
     FlightRecord,
     ProcessingStats,
     SegmentStatus,
     TimeReferenceSource,
 )
 from px4_flight_analyzer.parser import ParseError, load_ulog  # noqa: E402
+from px4_flight_analyzer.pdf_report import write_pdf_report  # noqa: E402
+from px4_flight_analyzer.report_metadata import build_report_header  # noqa: E402
 from px4_flight_analyzer.scanner import find_ulog_files, resolve_uav_pilot  # noqa: E402
+from px4_flight_analyzer.state_transitions import (  # noqa: E402
+    analyze_file_transitions,
+    build_segment_transitions,
+    format_transition_lines,
+)
 from px4_flight_analyzer.time_resolution import (  # noqa: E402
     make_time_label_fn,
     resolve_file_time_reference,
     resolve_segment_time,
 )
+from px4_flight_analyzer.trajectory import extract_trajectory  # noqa: E402
 
 logger = logging.getLogger("px4_flight_analyzer")
 
@@ -84,9 +95,11 @@ def run(settings_module: ModuleType, project_root: Path) -> int:
     logger.info("PX4 Flight Log Analyzer starting")
     logger.info("Input directory: %s", resolved.input_directory)
     logger.info("Output CSV: %s", resolved.output_csv)
+    logger.info("Output PDF: %s", resolved.output_pdf)
     logger.info("Timezone: %s", resolved.timezone_name)
     logger.info("Minimum flight duration: %.1f s", resolved.minimum_flight_duration_seconds)
     logger.info("Recursive search: %s", resolved.recursive_search)
+    logger.info("Fetch online map tiles: %s", resolved.map_fetch_online_tiles)
 
     stats = ProcessingStats()
 
@@ -95,6 +108,7 @@ def run(settings_module: ModuleType, project_root: Path) -> int:
     logger.info("Found %d .ulg file(s)", stats.files_found)
 
     records: List[FlightRecord] = []
+    pdf_entries: List[FlightPdfData] = []
 
     for ulog_path in ulog_files:
         uav_pilot = resolve_uav_pilot(ulog_path, resolved.input_directory)
@@ -123,6 +137,7 @@ def run(settings_module: ModuleType, project_root: Path) -> int:
         file_messages, file_error_status, integrity_reasons = analyze_file(ulog)
         if file_error_status is not ErrorAnalysisStatus.VOLLSTAENDIG:
             stats.error_analyses_incomplete += 1
+        file_transitions = analyze_file_transitions(ulog)
 
         for segment in segments:
             if segment.status is SegmentStatus.INCOMPLETE:
@@ -166,6 +181,17 @@ def run(settings_module: ModuleType, project_root: Path) -> int:
                 )
             )
 
+            transition_events = build_segment_transitions(file_transitions, segment)
+            pdf_entries.append(
+                FlightPdfData(
+                    flight_record=records[-1],
+                    trajectory=extract_trajectory(ulog, segment),
+                    battery_start=resolve_battery_level(ulog, segment.start_us),
+                    battery_end=resolve_battery_level(ulog, segment.end_us),
+                    transition_lines=format_transition_lines(transition_events, time_label_fn),
+                )
+            )
+
             stats.flights_exported += 1
             if error_result.presence is ErrorPresence.JA:
                 stats.exported_ja += 1
@@ -178,6 +204,12 @@ def run(settings_module: ModuleType, project_root: Path) -> int:
 
     write_csv(records, resolved.output_csv, resolved.csv_delimiter, resolved.input_directory)
     stats.output_csv_path = resolved.output_csv
+
+    groups = group_overlapping_flights(pdf_entries, resolved.input_directory)
+    header = build_report_header(resolved.input_directory, groups, records)
+    write_pdf_report(groups, header, resolved.output_pdf, resolved.map_fetch_online_tiles)
+    stats.output_pdf_path = resolved.output_pdf
+    stats.pdf_flight_event_groups = len(groups)
 
     _print_summary(stats)
     return 0
@@ -199,6 +231,7 @@ def _print_summary(stats: ProcessingStats) -> None:
         ("  Exported flights with Fehlermeldungen = Unbekannt", stats.exported_unbekannt),
         ("  Exported flights without a GPS-UTC time reference", stats.exported_without_time_reference),
         ("Files with an incomplete/impossible error analysis", stats.error_analyses_incomplete),
+        ("PDF flight event groups (overlapping flights merged)", stats.pdf_flight_event_groups),
     ]
 
     print()
@@ -209,6 +242,7 @@ def _print_summary(stats: ProcessingStats) -> None:
     for label, value in rows:
         print(f"{label:<{label_width}} {value}")
     print(f"{'Output CSV file':<{label_width}} {stats.output_csv_path}")
+    print(f"{'Output PDF file':<{label_width}} {stats.output_pdf_path}")
     print("=" * 70)
 
 
