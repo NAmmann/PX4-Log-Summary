@@ -19,12 +19,14 @@ def _valid_settings(**overrides):
     base = dict(
         INPUT_DIRECTORY=Path("./flight_data"),
         OUTPUT_CSV=Path("./output/flights.csv"),
+        OUTPUT_PDF=Path("./output/flight_test_summary.pdf"),
         MINIMUM_FLIGHT_DURATION_SECONDS=10,
         CSV_DELIMITER=";",
         TIMEZONE="UTC",
         RECURSIVE_SEARCH=True,
         VERBOSE_LOGGING=False,
         OVERWRITE_OUTPUT=True,
+        MAP_FETCH_ONLINE_TILES=True,
     )
     base.update(overrides)
     return types.SimpleNamespace(**base)
@@ -35,9 +37,11 @@ def test_valid_settings_resolve_successfully(tmp_path):
     resolved = resolve_settings(_valid_settings(), tmp_path)
     assert resolved.input_directory == (tmp_path / "flight_data").resolve()
     assert resolved.output_csv == (tmp_path / "output" / "flights.csv").resolve()
+    assert resolved.output_pdf == (tmp_path / "output" / "flight_test_summary.pdf").resolve()
     assert resolved.minimum_flight_duration_seconds == 10.0
     assert resolved.csv_delimiter == ";"
     assert resolved.recursive_search is True
+    assert resolved.map_fetch_online_tiles is True
 
 
 # --- #10: relative paths resolve against project_root, not CWD -------------------------------------
@@ -120,7 +124,9 @@ def test_valid_iana_timezone_accepted(tmp_path):
     assert resolved.timezone_name == "Europe/Berlin"
 
 
-@pytest.mark.parametrize("field", ["RECURSIVE_SEARCH", "VERBOSE_LOGGING", "OVERWRITE_OUTPUT"])
+@pytest.mark.parametrize(
+    "field", ["RECURSIVE_SEARCH", "VERBOSE_LOGGING", "OVERWRITE_OUTPUT", "MAP_FETCH_ONLINE_TILES"]
+)
 def test_non_bool_flags_raise(tmp_path, field):
     (tmp_path / "flight_data").mkdir()
     with pytest.raises(SettingsError, match=field):
@@ -160,3 +166,33 @@ def test_overwrite_output_true_passes_even_when_file_exists(tmp_path):
 
     resolved = resolve_settings(_valid_settings(OVERWRITE_OUTPUT=True), tmp_path)
     assert resolved.overwrite_output is True
+
+
+# --- OUTPUT_PDF: same existing-file guard as OUTPUT_CSV, plus a collision check ---------------------
+
+
+def test_overwrite_output_false_aborts_when_pdf_file_exists(tmp_path):
+    (tmp_path / "flight_data").mkdir()
+    (tmp_path / "output").mkdir()
+    (tmp_path / "output" / "flight_test_summary.pdf").write_text("existing")
+
+    with pytest.raises(SettingsError, match="already exists"):
+        resolve_settings(_valid_settings(OVERWRITE_OUTPUT=False), tmp_path)
+
+
+def test_overwrite_output_true_passes_even_when_pdf_file_exists(tmp_path):
+    (tmp_path / "flight_data").mkdir()
+    (tmp_path / "output").mkdir()
+    (tmp_path / "output" / "flight_test_summary.pdf").write_text("existing")
+
+    resolved = resolve_settings(_valid_settings(OVERWRITE_OUTPUT=True), tmp_path)
+    assert resolved.overwrite_output is True
+
+
+def test_output_csv_and_output_pdf_pointing_to_same_file_raises(tmp_path):
+    (tmp_path / "flight_data").mkdir()
+    with pytest.raises(SettingsError, match="OUTPUT_CSV.*OUTPUT_PDF|OUTPUT_PDF.*OUTPUT_CSV"):
+        resolve_settings(
+            _valid_settings(OUTPUT_CSV=Path("./output/same.dat"), OUTPUT_PDF=Path("./output/same.dat")),
+            tmp_path,
+        )

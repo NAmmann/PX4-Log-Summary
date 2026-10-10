@@ -17,6 +17,9 @@ INPUT_DIRECTORY = Path("./flight_data")
 # Destination file for the CSV export.
 OUTPUT_CSV = Path("./output/flights.csv")
 
+# Destination file for the PDF flight test summary.
+OUTPUT_PDF = Path("./output/flight_test_summary.pdf")
+
 # Minimum flight duration in seconds. Shorter flight segments are
 # discarded and never written to the CSV.
 MINIMUM_FLIGHT_DURATION_SECONDS = 10
@@ -37,7 +40,12 @@ RECURSIVE_SEARCH = True
 # selection, error analysis details).
 VERBOSE_LOGGING = False
 
-# Behavior when OUTPUT_CSV already exists:
+# Behavior when OUTPUT_CSV or OUTPUT_PDF already exists:
 #   True  = overwrite the existing file
 #   False = abort with a clear error message before processing anything
 OVERWRITE_OUTPUT = True
+
+# Whether the PDF report's trajectory maps fetch real OpenStreetMap
+# tiles over the network. False skips straight to an offline blank-grid
+# trajectory plot -- no network calls at all.
+MAP_FETCH_ONLINE_TILES = True

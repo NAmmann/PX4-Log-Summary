@@ -24,6 +24,7 @@ class ResolvedSettings:
 
     input_directory: Path
     output_csv: Path
+    output_pdf: Path
     minimum_flight_duration_seconds: float
     csv_delimiter: str
     timezone_name: str
@@ -31,6 +32,7 @@ class ResolvedSettings:
     recursive_search: bool
     verbose_logging: bool
     overwrite_output: bool
+    map_fetch_online_tiles: bool
 
 
 def _require_bool(settings_module: ModuleType, attribute_name: str) -> bool:
@@ -72,6 +74,7 @@ def resolve_settings(settings_module: ModuleType, project_root: Path) -> Resolve
     """
     input_directory = _require_path(settings_module, "INPUT_DIRECTORY", project_root)
     output_csv = _require_path(settings_module, "OUTPUT_CSV", project_root)
+    output_pdf = _require_path(settings_module, "OUTPUT_PDF", project_root)
 
     if not hasattr(settings_module, "MINIMUM_FLIGHT_DURATION_SECONDS"):
         raise SettingsError("settings.py is missing required setting 'MINIMUM_FLIGHT_DURATION_SECONDS'.")
@@ -116,11 +119,18 @@ def resolve_settings(settings_module: ModuleType, project_root: Path) -> Resolve
     recursive_search = _require_bool(settings_module, "RECURSIVE_SEARCH")
     verbose_logging = _require_bool(settings_module, "VERBOSE_LOGGING")
     overwrite_output = _require_bool(settings_module, "OVERWRITE_OUTPUT")
+    map_fetch_online_tiles = _require_bool(settings_module, "MAP_FETCH_ONLINE_TILES")
 
     if not input_directory.exists() or not input_directory.is_dir():
         raise SettingsError(
             "settings.py: 'INPUT_DIRECTORY' does not resolve to an existing directory: "
             f"{input_directory}"
+        )
+
+    if output_csv.resolve() == output_pdf.resolve():
+        raise SettingsError(
+            "settings.py: 'OUTPUT_CSV' and 'OUTPUT_PDF' must not point to the same file: "
+            f"{output_csv}"
         )
 
     if not overwrite_output and output_csv.exists():
@@ -129,9 +139,16 @@ def resolve_settings(settings_module: ModuleType, project_root: Path) -> Resolve
             "Either delete/move the existing file, or set OVERWRITE_OUTPUT = True in settings.py."
         )
 
+    if not overwrite_output and output_pdf.exists():
+        raise SettingsError(
+            f"Output file already exists and OVERWRITE_OUTPUT is False: {output_pdf}\n"
+            "Either delete/move the existing file, or set OVERWRITE_OUTPUT = True in settings.py."
+        )
+
     return ResolvedSettings(
         input_directory=input_directory,
         output_csv=output_csv,
+        output_pdf=output_pdf,
         minimum_flight_duration_seconds=float(min_duration),
         csv_delimiter=delimiter,
         timezone_name=timezone_name,
@@ -139,4 +156,5 @@ def resolve_settings(settings_module: ModuleType, project_root: Path) -> Resolve
         recursive_search=recursive_search,
         verbose_logging=verbose_logging,
         overwrite_output=overwrite_output,
+        map_fetch_online_tiles=map_fetch_online_tiles,
     )
