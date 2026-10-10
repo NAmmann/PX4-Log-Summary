@@ -136,7 +136,7 @@ def is_armed_overlap(armed_changes: List[Tuple[int, bool]], start_us: int, end_u
     return False
 
 
-def _derive_armed_changes(ulog) -> Tuple[List[Tuple[int, bool]], Optional[str]]:
+def derive_armed_changes(ulog) -> Tuple[List[Tuple[int, bool]], Optional[str]]:
     """Get the best available armed-state step function for `ulog`.
 
     Prefers `actuator_armed.armed`; falls back to the legacy
@@ -190,7 +190,7 @@ def detect_flight_segments(ulog, source_file: Path) -> List[FlightSegment]:
     raw_segments = build_raw_segments(
         [(int(t), bool(v)) for t, v in landed_changes], int(ulog.last_timestamp)
     )
-    armed_changes, armed_source = _derive_armed_changes(ulog)
+    armed_changes, armed_source = derive_armed_changes(ulog)
 
     segments: List[FlightSegment] = []
     for index, (start_us, end_us, missing_start, missing_end) in enumerate(raw_segments):
