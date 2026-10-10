@@ -43,12 +43,16 @@ def _settings(**overrides):
     base = dict(
         INPUT_DIRECTORY=Path("flight_data"),
         OUTPUT_CSV=Path("output/flights.csv"),
+        OUTPUT_PDF=Path("output/flight_test_summary.pdf"),
         MINIMUM_FLIGHT_DURATION_SECONDS=10,
         CSV_DELIMITER=";",
         TIMEZONE="UTC",
         RECURSIVE_SEARCH=True,
         VERBOSE_LOGGING=False,
         OVERWRITE_OUTPUT=True,
+        # Belt-and-suspenders offline guarantee for the whole test suite,
+        # independent of any map_render-level monkeypatching elsewhere.
+        MAP_FETCH_ONLINE_TILES=False,
     )
     base.update(overrides)
     return types.SimpleNamespace(**base)
@@ -119,6 +123,10 @@ def test_full_end_to_end_pipeline(tmp_path):
     assert "2026-06-15" in content
     assert ";Ja;" in content  # Fehlermeldungen = Ja, thanks to the ERROR message
 
+    output_pdf = tmp_path / "output" / "flight_test_summary.pdf"
+    assert output_pdf.exists()
+    assert output_pdf.stat().st_size > 0
+
 
 # --- #48: correct console summary -------------------------------------------------------------------
 
@@ -162,6 +170,31 @@ def test_console_summary_reports_naming_and_parse_failures(tmp_path, capsys):
     assert _extract_summary_value(output, "skipped (invalid UAV/Pilot naming)") == 1
     assert _extract_summary_value(output, "Log files with parse errors") == 1
     assert _extract_summary_value(output, "Flights exported") == 0
+
+
+# --- multi-UAV time overlap: 2 CSV rows merge into 1 PDF flight event group ------------------------
+
+
+def test_multi_uav_overlapping_flights_merge_into_one_pdf_group(tmp_path, capsys):
+    anchor_us_1 = _epoch_us(2026, 6, 15, 10, 0, 0)
+    anchor_us_2 = _epoch_us(2026, 6, 15, 10, 0, 10)  # offset so the two flights' windows overlap
+    _build_normal_flight(
+        tmp_path / "flight_data" / "Falcon01_Max" / "flight.ulg", anchor_us_1, error_message=False
+    )
+    _build_normal_flight(
+        tmp_path / "flight_data" / "Falcon02_Erika" / "flight.ulg", anchor_us_2, error_message=False
+    )
+
+    exit_code = _orchestrator.run(_settings(), tmp_path)
+    assert exit_code == 0
+
+    output = capsys.readouterr().out
+    assert _extract_summary_value(output, "Flights exported") == 2
+    assert _extract_summary_value(output, "PDF flight event groups") == 1
+
+    output_pdf = tmp_path / "output" / "flight_test_summary.pdf"
+    assert output_pdf.exists()
+    assert output_pdf.stat().st_size > 0
 
 
 # --- settings validation aborts the whole run before any scanning ----------------------------------
@@ -223,12 +256,14 @@ def test_real_cli_invocation_without_arguments(tmp_path):
         "from pathlib import Path\n"
         'INPUT_DIRECTORY = Path("./flight_data")\n'
         'OUTPUT_CSV = Path("./output/flights.csv")\n'
+        'OUTPUT_PDF = Path("./output/flight_test_summary.pdf")\n'
         "MINIMUM_FLIGHT_DURATION_SECONDS = 10\n"
         'CSV_DELIMITER = ";"\n'
         'TIMEZONE = "UTC"\n'
         "RECURSIVE_SEARCH = True\n"
         "VERBOSE_LOGGING = False\n"
         "OVERWRITE_OUTPUT = True\n"
+        "MAP_FETCH_ONLINE_TILES = False\n"
     )
 
     unrelated_cwd = tmp_path / "somewhere_else_entirely"
@@ -244,3 +279,4 @@ def test_real_cli_invocation_without_arguments(tmp_path):
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert "processing summary" in result.stdout.lower()
     assert (work_dir / "output" / "flights.csv").exists()
+    assert (work_dir / "output" / "flight_test_summary.pdf").exists()
