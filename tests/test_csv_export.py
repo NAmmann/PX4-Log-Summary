@@ -70,6 +70,8 @@ def test_csv_header_and_column_order(tmp_path):
         "Pilot",
         "StartZeit",
         "LandeZeit",
+        "StartZeitUTC",
+        "LandeZeitUTC",
         "FlugDauerSekunden",
         "StartLatitude",
         "StartLongitude",
@@ -187,7 +189,27 @@ def test_csv_row_reflects_timezone_converted_time(tmp_path):
     assert row["Datum"] == "2026-06-15"
     assert row["StartZeit"] == "14:00:01"
     assert row["LandeZeit"] == "14:00:21"
+    # Europe/Berlin is UTC+2 in June (CEST) -- the UTC columns must reflect that offset.
+    assert row["StartZeitUTC"] == "2026-06-15 12:00:01"
+    assert row["LandeZeitUTC"] == "2026-06-15 12:00:21"
     assert row["ZeitreferenzQuelle"] == "GPS-UTC"
+
+
+def test_csv_row_utc_columns_cross_midnight_when_local_date_differs(tmp_path):
+    berlin = ZoneInfo("Europe/Berlin")
+    record = _make_record(
+        tmp_path / "f.ulg",
+        resolved_start_utc=dt.datetime(2026, 6, 16, 0, 30, 0, tzinfo=berlin),
+        resolved_end_utc=dt.datetime(2026, 6, 16, 0, 50, 0, tzinfo=berlin),
+        time_source=TimeReferenceSource.GPS_UTC,
+    )
+    row = record.to_csv_row()
+    assert row["Datum"] == "2026-06-16"
+    assert row["StartZeit"] == "00:30:00"
+    # The UTC date rolls back to the previous day -- this is exactly why the UTC
+    # columns carry a full date, not just a time, unlike the local StartZeit/LandeZeit.
+    assert row["StartZeitUTC"] == "2026-06-15 22:30:00"
+    assert row["LandeZeitUTC"] == "2026-06-15 22:50:00"
 
 
 def test_csv_row_blank_time_fields_when_not_resolvable(tmp_path):
@@ -196,6 +218,8 @@ def test_csv_row_blank_time_fields_when_not_resolvable(tmp_path):
     assert row["Datum"] == ""
     assert row["StartZeit"] == ""
     assert row["LandeZeit"] == ""
+    assert row["StartZeitUTC"] == ""
+    assert row["LandeZeitUTC"] == ""
     assert row["ZeitreferenzQuelle"] == "Nicht ermittelbar"
 
 

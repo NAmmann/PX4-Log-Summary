@@ -24,6 +24,8 @@ CSV_COLUMNS = (
     "Pilot",
     "StartZeit",
     "LandeZeit",
+    "StartZeitUTC",
+    "LandeZeitUTC",
     "FlugDauerSekunden",
     "StartLatitude",
     "StartLongitude",

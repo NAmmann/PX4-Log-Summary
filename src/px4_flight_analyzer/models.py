@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from datetime import timezone as dt_timezone
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional
@@ -152,15 +153,27 @@ class FlightRecord:
     def to_csv_row(self) -> dict:
         tr = self.time_resolution
         if tr.source is TimeReferenceSource.GPS_UTC and tr.resolved_start_utc is not None:
+            # `resolved_start_utc`/`resolved_end_utc` are already converted to the
+            # configured local display timezone (see time_resolution.resolve_segment_time);
+            # re-deriving true UTC from these tz-aware values is a trivial, always-correct
+            # .astimezone() call -- no separate UTC-tracking field is needed.
             datum = tr.resolved_start_utc.strftime("%Y-%m-%d")
             start_zeit = tr.resolved_start_utc.strftime("%H:%M:%S")
             lande_zeit = (
                 tr.resolved_end_utc.strftime("%H:%M:%S") if tr.resolved_end_utc is not None else ""
             )
+            start_zeit_utc = tr.resolved_start_utc.astimezone(dt_timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            lande_zeit_utc = (
+                tr.resolved_end_utc.astimezone(dt_timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                if tr.resolved_end_utc is not None
+                else ""
+            )
         else:
             datum = ""
             start_zeit = ""
             lande_zeit = ""
+            start_zeit_utc = ""
+            lande_zeit_utc = ""
 
         gps = self.gps_position
         start_lat = f"{gps.latitude_deg:.7f}" if gps is not None else ""
@@ -172,6 +185,8 @@ class FlightRecord:
             "Pilot": self.pilot_name,
             "StartZeit": start_zeit,
             "LandeZeit": lande_zeit,
+            "StartZeitUTC": start_zeit_utc,
+            "LandeZeitUTC": lande_zeit_utc,
             "FlugDauerSekunden": f"{self.segment.duration_seconds:.1f}",
             "StartLatitude": start_lat,
             "StartLongitude": start_lon,

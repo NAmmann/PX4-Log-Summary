@@ -163,7 +163,7 @@ px4-flight-analyzer/
 ├── tests/
 │   ├── conftest.py
 │   ├── helpers/ulog_builder.py    # synthetic .ulg file builder for tests
-│   └── test_*.py                  # ~205 automated test cases
+│   └── test_*.py                  # ~206 automated test cases
 └── output/                        # created automatically if missing
 ```
 
@@ -341,7 +341,7 @@ positional unpacking, so they cannot be swapped.
 
 ## CSV column reference
 
-Twelve columns, `;`-delimited by default, UTF-8, written via Python's
+Fourteen columns, `;`-delimited by default, UTF-8, written via Python's
 `csv` module (never hand-built strings), header always present even when
 zero flights were found:
 
@@ -352,16 +352,22 @@ zero flights were found:
 | 3 | `Pilot` | Pilot name from the folder structure. |
 | 4 | `StartZeit` | Liftoff time (`HH:MM:SS`), local to `TIMEZONE`. Blank if no time reference. |
 | 5 | `LandeZeit` | Touchdown time (`HH:MM:SS`), local to `TIMEZONE`. Blank if no time reference. |
-| 6 | `FlugDauerSekunden` | Flight duration in seconds (numeric, one decimal). |
-| 7 | `StartLatitude` | Start latitude, decimal degrees with a decimal point. Blank if unavailable. |
-| 8 | `StartLongitude` | Start longitude, decimal degrees with a decimal point. Blank if unavailable. |
-| 9 | `Fehlermeldungen` | `Ja`, `Nein`, or `Unbekannt` (see above). |
-| 10 | `FehlermeldungenDetails` | Formatted message list, or an explanatory note; may contain embedded newlines (correctly CSV-quoted). |
-| 11 | `FehleranalyseStatus` | `Vollständig`, `Unvollständig`, or `Nicht möglich`. |
-| 12 | `ZeitreferenzQuelle` | `GPS-UTC` if a GPS-UTC time anchor was found and applied, otherwise `Nicht ermittelbar`. |
+| 6 | `StartZeitUTC` | Liftoff date and time (`YYYY-MM-DD HH:MM:SS`), true UTC -- derived from `StartZeit` via a plain timezone conversion, so it is always consistent with it. Carries its own date because the UTC date can differ from `Datum` near local midnight. Blank if no time reference. |
+| 7 | `LandeZeitUTC` | Touchdown date and time (`YYYY-MM-DD HH:MM:SS`), true UTC, same rationale as `StartZeitUTC`. Blank if no time reference. |
+| 8 | `FlugDauerSekunden` | Flight duration in seconds (numeric, one decimal). |
+| 9 | `StartLatitude` | Start latitude, decimal degrees with a decimal point. Blank if unavailable. |
+| 10 | `StartLongitude` | Start longitude, decimal degrees with a decimal point. Blank if unavailable. |
+| 11 | `Fehlermeldungen` | `Ja`, `Nein`, or `Unbekannt` (see above). |
+| 12 | `FehlermeldungenDetails` | Formatted message list, or an explanatory note; may contain embedded newlines (correctly CSV-quoted). |
+| 13 | `FehleranalyseStatus` | `Vollständig`, `Unvollständig`, or `Nicht möglich`. |
+| 14 | `ZeitreferenzQuelle` | `GPS-UTC` if a GPS-UTC time anchor was found and applied, otherwise `Nicht ermittelbar`. |
+
+`StartZeit`/`LandeZeit` are always local to `TIMEZONE` (e.g. `Europe/Berlin`);
+`StartZeitUTC`/`LandeZeitUTC` are always true UTC, regardless of `TIMEZONE`.
+The PDF flight test summary (below) shows only the local time, not UTC.
 
 See [Deliberate deviations](#deliberate-deviations-from-the-literal-brief)
-for why there are twelve columns (and why `Datum`/`StartZeit`/`LandeZeit`
+for why there are fourteen columns (and why `Datum`/`StartZeit`/`LandeZeit`
 can be blank) rather than the brief's literal eleven.
 
 Rows are sorted chronologically: all flights with a resolved `GPS-UTC`
@@ -486,7 +492,7 @@ pip install -r requirements.txt   # includes pytest
 python3 -m pytest tests/ -v
 ```
 
-The suite (~205 cases across the modules listed under
+The suite (~206 cases across the modules listed under
 [Project structure](#project-structure)) covers every scenario from the
 project brief: file discovery and UAV/Pilot assignment, flight detection
 (including multi-flight files, missing start/end, implausible duration,
@@ -565,17 +571,24 @@ explicitly rather than silently:
    `Vollständig`/`Unvollständig`/`Nicht möglich`) -- preserving
    compatibility with German Excel users even though the codebase itself
    is English.
-2. **Twelfth CSV column, `ZeitreferenzQuelle`.** The brief's literal spec
-   has eleven columns and implies every valid flight gets a real date
-   and time. In practice, a file can have no GPS-UTC anchor at all (no
-   GPS topic logged, or a fix never acquired) -- the brief explicitly
-   forbids inventing a start/landing time in that case. Rather than
-   silently dropping those otherwise-valid flights from the CSV, they
-   are **still exported**, with `Datum`/`StartZeit`/`LandeZeit` left
-   blank and sorted after all time-resolved rows (by filename). The new
-   `ZeitreferenzQuelle` column (`GPS-UTC` / `Nicht ermittelbar`) makes
-   this basis visible directly in the CSV, rather than only in the
-   console log.
+2. **Extra CSV columns beyond the brief's literal eleven**, for two
+   independent reasons:
+   - `ZeitreferenzQuelle`: the brief implies every valid flight gets a real
+     date and time. In practice, a file can have no GPS-UTC anchor at all
+     (no GPS topic logged, or a fix never acquired) -- the brief explicitly
+     forbids inventing a start/landing time in that case. Rather than
+     silently dropping those otherwise-valid flights from the CSV, they are
+     **still exported**, with `Datum`/`StartZeit`/`LandeZeit` left blank and
+     sorted after all time-resolved rows (by filename). This column
+     (`GPS-UTC` / `Nicht ermittelbar`) makes that basis visible directly in
+     the CSV, rather than only in the console log.
+   - `StartZeitUTC`/`LandeZeitUTC`: `StartZeit`/`LandeZeit` are local to the
+     configured `TIMEZONE`, which is convenient to read but ambiguous when
+     comparing logs against other UTC-timestamped data (e.g. another
+     system's logs, or a different `TIMEZONE` setting on a re-run). These
+     two columns carry the same instants in true UTC, always consistent
+     with the local columns by construction (a plain timezone conversion of
+     the same underlying value, not an independently resolved time).
 3. **No `pyproject.toml`.** To avoid any ambiguity against the brief's
    "no configuration files" rule -- even though that rule's intent is
    about *runtime settings*, not build metadata -- `src/` is made
